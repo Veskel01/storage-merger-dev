@@ -1,0 +1,139 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:latest
+    container_name: postgres_db
+    restart: unless-stopped
+    ports:
+      - 5431:5432
+    volumes:
+      - postgres_data
+    networks:
+      - app_network
+    env_file:
+      - docker/postgres.env
+
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    restart: unless-stopped
+    ports:
+      - 2181:2181
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data
+    networks:
+      - kafka_network
+
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    restart: unless-stopped
+    ports:
+      - 9092:9092
+      - 9094:9094
+    depends_on:
+      - zookeeper
+    env_file:
+      - $PWD/docker/kafka.env
+    networks:
+      - app_network
+      - kafka_network
+
+  kafka_ui:
+    container_name: kafka_ui
+    image: provectuslabs/kafka-ui:latest
+    depends_on:
+      - kafka
+    ports:
+      - 8080:8080
+    environment:
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    networks:
+      - kafka_network
+      - app_network
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - ${REDIS_PORT}:6379
+    networks:
+      - app_network
+    volumes:
+      - cache:/data
+
+  elk_setup:
+    container_name: elk_setup
+    build:
+      context: docker/elk_setup/
+      args:
+        ELASTIC_VERSION: ${ELASTIC_VERSION}
+    init: true
+    volumes:
+      - elk_setup:/state:Z
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-}
+      LOGSTASH_INTERNAL_PASSWORD: ${LOGSTASH_INTERNAL_PASSWORD:-}
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD:-}
+    networks:
+      - elk_network
+
+  elasticsearch:
+    container_name: elasticsearch
+    build:
+      context: docker/elasticsearch/
+      args:
+        ELASTIC_VERSION: ${ELASTIC_VERSION}
+    volumes:
+      - $PWD/docker/elasticsearch/config.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro,z
+      - elastic_data:/usr/share/elasticsearch/data:z
+    ports:
+      - ${ES_PORT}:9200
+      - '9300:9300'
+    environment:
+      ES_JAVA_OPTS: -Xmx256m -Xms256m
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-}
+      discovery.type: ${ES_DISCOVERY_TYPE}
+    networks:
+      - elk_network
+
+  kibana:
+    container_name: kibana
+    build:
+      context: docker/kibana/
+      args:
+        ELASTIC_VERSION: ${ELASTIC_VERSION}
+    volumes:
+      - $PWD/docker/kibana/config.yml:/usr/share/kibana/config/kibana.yml:ro,z
+      - kibana_data:/usr/share/kibana/data:z
+    ports:
+      - ${KIBANA_PORT}:5601
+    environment:
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD:-}
+    networks:
+      - elk_network
+    depends_on:
+      - elasticsearch
+
+volumes:
+  postgres_data:
+  elk_setup:
+  elastic_data:
+  kibana_data:
+  cache:
+
+
+networks:
+  app_network:
+    driver: bridge
+  elk_network:
+    driver: bridge
+  kafka_network:
+    driver: bridge
